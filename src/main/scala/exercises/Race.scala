@@ -1,12 +1,14 @@
 package exercises
 
-import scala.util.Random
-import scala.concurrent.duration._
+import cats.Reducible
 import cats.data._
 import cats.effect._
 import cats.syntax.applicative._
-import cats.syntax.functor._
 import cats.syntax.flatMap._
+import cats.syntax.functor._
+
+import scala.concurrent.duration._
+import scala.util.Random
 
 object Race extends IOApp {
 
@@ -35,26 +37,27 @@ object Race extends IOApp {
   }
 
   // And implement this function:
-  def raceToSuccess[F[_], A](tasks: NonEmptyList[F[A]])
-                            (implicit C: Concurrent[F]): F[A] = tasks.reduce[F[A]] { case (l: F[A], r: F[A]) =>
+  def raceToSuccess[F[_], R[_], A](tasks: R[F[A]])
+                                  (implicit C: Concurrent[F], R: Reducible[R]): F[A] =
+    R.reduce(tasks) { case (l: F[A], r: F[A]) =>
 
-    C.racePair(C.attempt[A](l), C.attempt[A](r)).flatMap {
+      C.racePair(C.attempt[A](l), C.attempt[A](r)).flatMap {
 
-      case Left((Right(w), l)) => l.cancel.map(_ => w)
+        case Left((Right(w), l)) => l.cancel.map(_ => w)
 
-      case Left((Left(ex), f)) => f.join.flatMap {
-        case Left(ex2) => C.raiseError(CompositeException(NonEmptyList.of(ex, ex2)))
-        case Right(r) => C.pure(r)
+        case Left((Left(ex), f)) => f.join.flatMap {
+          case Left(ex2) => C.raiseError(CompositeException(NonEmptyList.of(ex, ex2)))
+          case Right(r) => C.pure(r)
+        }
+
+        case Right((f, Left(ex))) => f.join.flatMap {
+          case Left(ex2) => C.raiseError[A](CompositeException(NonEmptyList.of(ex, ex2)))
+          case Right(r) => C.pure(r)
+        }
+
+        case Right((l, Right(w))) => l.cancel.map(_ => w)
       }
-
-      case Right((f, Left(ex))) => f.join.flatMap {
-        case Left(ex2) => C.raiseError[A](CompositeException(NonEmptyList.of(ex, ex2)))
-        case Right(r) => C.pure(r)
-      }
-
-      case Right((l, Right(w))) => l.cancel.map(_ => w)
     }
-  }
 
   // In your IOApp, you can use the following sample method list
 
