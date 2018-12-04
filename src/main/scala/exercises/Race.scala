@@ -12,6 +12,23 @@ import scala.util.Random
 
 object Race extends IOApp {
 
+  implicit class AttemptOps[F[_] : Concurrent, A](fa: F[A]) {
+
+    def attempt: F[Either[Throwable, A]] = Concurrent[F].attempt[A](fa)
+  }
+
+  implicit class FiberOps[F[_]: Concurrent, A](fiber: Fiber[F, A]) {
+
+    def cancelAndReturn[B](v: B): F[B] = fiber.cancel.map(_ => v)
+  }
+
+
+
+  implicit class CompositeExOps(cEx: CompositeException) {
+
+    def withEx(ex: Throwable): CompositeException = cEx.withEx(ex)
+  }
+
   case class Data(source: String, body: String)
 
   def provider(name: String)(implicit timer: Timer[IO]): IO[Data] = {
@@ -25,37 +42,42 @@ object Race extends IOApp {
     proc.guaranteeCase {
       case ExitCase.Completed => IO { println(s"$name request finished") }
       case ExitCase.Canceled => IO { println(s"$name request canceled") }
-      case ExitCase.Error(_) => IO { println(s"$name errored") }
+      case ExitCase.Error(_) => IO { println(s"$name errored")}
     }
   }
 
   // Use this class for reporting all failures.
-  case class CompositeException(ex: NonEmptyList[Throwable]) extends Exception("All race candidates have failed") {
-    override def getMessage: String = {
-      ex.map(_.getMessage).toList.mkString(":")
+  case class CompositeException(exs: NonEmptyList[Throwable]) extends Exception("All race candidates have failed") {
+    override def getMessage: String = exs.toList.mkString(" : ")
+
+    def withEx(ex: Throwable): CompositeException = CompositeException( ex :: exs )
+  }
+
+  type AttemptResult[A] = Either[Throwable, A]
+
+  private def resultOrCompositeError[F[_] : Concurrent, A](f: Fiber[F, AttemptResult[A]], prevEx: Throwable)
+                                                          (implicit C: Concurrent[F]): F[A] = {
+    C.flatMap(f.join) {
+      case Left(nextEx) => C.raiseError[A](prevEx match {
+        case ex: CompositeException => ex.withEx(nextEx)
+        case _ => CompositeException(NonEmptyList.of(prevEx, nextEx))
+      })
+      case Right(r) => C.pure(r)
     }
   }
 
-  // And implement this function:
   def raceToSuccess[F[_], R[_], A](tasks: R[F[A]])
                                   (implicit C: Concurrent[F], R: Reducible[R]): F[A] =
-    R.reduce(tasks) { case (l: F[A], r: F[A]) =>
-
-      C.racePair(C.attempt[A](l), C.attempt[A](r)).flatMap {
-
-        case Left((Right(w), l)) => l.cancel.map(_ => w)
-
-        case Left((Left(ex), f)) => f.join.flatMap {
-          case Left(ex2) => C.raiseError(CompositeException(NonEmptyList.of(ex, ex2)))
-          case Right(r) => C.pure(r)
-        }
-
-        case Right((f, Left(ex))) => f.join.flatMap {
-          case Left(ex2) => C.raiseError[A](CompositeException(NonEmptyList.of(ex, ex2)))
-          case Right(r) => C.pure(r)
-        }
-
-        case Right((l, Right(w))) => l.cancel.map(_ => w)
+    R.reduce(tasks) { case (l, r) =>
+      C.racePair(l.attempt, r.attempt).flatMap {
+        case Right((l, Right(w))) =>
+          l.cancelAndReturn(w)
+        case Left((Right(w), l)) =>
+          l.cancelAndReturn(w)
+        case Left((Left(ex), f)) =>
+          resultOrCompositeError(f, ex)
+        case Right((f, Left(ex))) =>
+          resultOrCompositeError(f, ex)
       }
     }
 
