@@ -7,7 +7,7 @@ version := "0.0.1"
 scalaVersion := "2.12.7"
 
 libraryDependencies ++= Seq(
-  "org.typelevel" %% "cats-effect" % "1.0.0"
+  "org.typelevel" %% "cats-effect" % "1.1.0"
 )
 
 scalacOptions ++= Seq(
