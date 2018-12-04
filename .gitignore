@@ -1,6 +1,7 @@
 *.class
 *.log
 .idea
+*.iml
 dist/*
 target/
 lib_managed/
