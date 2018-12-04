@@ -6,6 +6,7 @@ import cats.data._
 import cats.effect._
 import cats.syntax.applicative._
 import cats.syntax.functor._
+import cats.syntax.flatMap._
 
 object Race extends IOApp {
 
@@ -34,20 +35,21 @@ object Race extends IOApp {
   }
 
   // And implement this function:
-  def raceToSuccess[A](ios: NonEmptyList[IO[A]]): IO[A] = ios.reduce[IO[A]] { case (l: IO[A], r: IO[A]) =>
+  def raceToSuccess[F[_], A](tasks: NonEmptyList[F[A]])
+                            (implicit C: Concurrent[F]): F[A] = tasks.reduce[F[A]] { case (l: F[A], r: F[A]) =>
 
-    IO.racePair(l.attempt, r.attempt).flatMap {
+    C.racePair(C.attempt[A](l), C.attempt[A](r)).flatMap {
 
       case Left((Right(w), l)) => l.cancel.map(_ => w)
 
       case Left((Left(ex), f)) => f.join.flatMap {
-        case Left(ex2) => IO.raiseError(CompositeException(NonEmptyList.of(ex, ex2)))
-        case Right(r) => IO.pure(r)
+        case Left(ex2) => C.raiseError(CompositeException(NonEmptyList.of(ex, ex2)))
+        case Right(r) => C.pure(r)
       }
 
       case Right((f, Left(ex))) => f.join.flatMap {
-        case Left(ex2) => IO.raiseError[A](CompositeException(NonEmptyList.of(ex, ex2)))
-        case Right(r) => IO.pure(r)
+        case Left(ex2) => C.raiseError[A](CompositeException(NonEmptyList.of(ex, ex2)))
+        case Right(r) => C.pure(r)
       }
 
       case Right((l, Right(w))) => l.cancel.map(_ => w)
