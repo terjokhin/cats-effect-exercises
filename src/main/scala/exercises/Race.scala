@@ -4,7 +4,6 @@ import cats.Reducible
 import cats.data._
 import cats.effect._
 import cats.syntax.applicative._
-import cats.syntax.flatMap._
 import cats.syntax.functor._
 
 import scala.concurrent.duration._
