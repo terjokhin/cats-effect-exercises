@@ -4,6 +4,8 @@ import cats.Reducible
 import cats.data._
 import cats.effect._
 import cats.syntax.applicative._
+import cats.syntax.either._
+import cats.syntax.flatMap._
 import cats.syntax.functor._
 
 import scala.concurrent.duration._
@@ -52,18 +54,17 @@ object Race extends IOApp {
     def withEx(ex: Throwable): CompositeException = CompositeException( ex :: exs )
   }
 
+  object CompositeException {
+    def fromEx(ex: Throwable): CompositeException = CompositeException(NonEmptyList.one(ex))
+  }
+
   type AttemptResult[A] = Either[Throwable, A]
 
-  private def resultOrCompositeError[F[_] : Concurrent, A](f: Fiber[F, AttemptResult[A]], prevEx: Throwable)
-                                                          (implicit C: Concurrent[F]): F[A] = {
-    C.flatMap(f.join) {
-      case Left(nextEx) => C.raiseError[A](prevEx match {
-        case ex: CompositeException => ex.withEx(nextEx)
-        case _ => CompositeException(NonEmptyList.of(prevEx, nextEx))
-      })
-      case Right(r) => C.pure(r)
+  private def resultOrCompositeError[F[_] : Concurrent, A](f: Fiber[F, AttemptResult[A]],
+                                                           ex: CompositeException): F[A] =
+    Concurrent[F].flatMap(f.join) {
+      _.leftMap(e => ex.withEx(e): Throwable).raiseOrPure[F]
     }
-  }
 
   def raceToSuccess[F[_], R[_], A](tasks: R[F[A]])
                                   (implicit C: Concurrent[F], R: Reducible[R]): F[A] =
@@ -74,9 +75,9 @@ object Race extends IOApp {
         case Left((Right(w), l)) =>
           l.cancelAndReturn(w)
         case Left((Left(ex), f)) =>
-          resultOrCompositeError(f, ex)
+          resultOrCompositeError(f, CompositeException.fromEx(ex))
         case Right((f, Left(ex))) =>
-          resultOrCompositeError(f, ex)
+          resultOrCompositeError(f, CompositeException.fromEx(ex))
       }
     }
 

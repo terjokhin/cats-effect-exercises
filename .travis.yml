@@ -1,0 +1,11 @@
+sudo: required
+language: scala
+jdk:
+  - oraclejdk8
+branches:
+  only:
+    - master
+scala:
+  - 2.12.7
+script:
+  - sbt clean compile
